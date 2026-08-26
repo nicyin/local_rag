@@ -1,23 +1,11 @@
-# localrag — Local RAG Chat
-
-Ask questions about your own PDF documents. Fully offline — no API keys, no cloud, no data leaving your machine.
-
-Available in **Python** and **JavaScript**. Both versions share the same `docs/` folder.
-
+# skinny dip proto
 ---
-
 ## Project Structure
 
 ```
-my_rag/
+skinny_dip_proto/
 │
-├── docs/              ← drop your PDFs here
-│
-├── python/            ← Python version (Flask + ChromaDB)
-│   ├── README.md
-│   ├── requirements.txt
-│   ├── rag.py         ← CLI
-│   └── rag_web.py     ← web UI  →  http://localhost:6600
+├── docs/              ← drop your documents here (.pdf, .md, .jsonl)
 │
 └── js/                ← JavaScript version (Express + ChromaDB)
     ├── README.md
@@ -30,19 +18,22 @@ my_rag/
 
 ## Stack
 
-| | Python | JavaScript |
-|---|---|---|
-| Language | Python 3.9+ | Node.js 18+ |
-| Web server | Flask | Express |
-| Embeddings | Ollama (`nomic-embed-text`) | Ollama (`nomic-embed-text`) |
-| LLM | Ollama (`qwen2.5:7b`) | Ollama (`qwen2.5:7b`) |
-| Vector store | ChromaDB (persistent) | ChromaDB |
-| PDF parsing | LangChain + PyPDF | pdf-parse |
-| Web port | 6600 | 6601 |
+|  | JavaScript |
+|---|---|
+| Language |  Node.js 18+ |
+| Web server |  Express |
+| Embeddings |  Ollama (default), OpenAI, or Google Gemini |
+| LLM |  Ollama (`qwen2.5:7b`) |
+| Vector store |  ChromaDB |
+| PDF parsing |  pdf-parse |
+| Web port |  6601 |
 
 ---
 
 ## Quick Start
+### 0. Clone the repo
+ 
+`git clone https://github.com/computationalmama/skinny_dip_proto.git`
 
 ### 1. Install Ollama and pull models
 
@@ -53,32 +44,88 @@ ollama pull nomic-embed-text
 ollama pull qwen2.5:7b
 ```
 
-### 2. Add your PDFs
+### 2. Add your documents
 
-Copy PDF files into the `docs/` folder.
+Copy your documents into the `docs/` folder. Supported formats:
+- **PDF** (.pdf) - Extracted using pdf-parse
+- **Markdown** (.md) - Plain text extraction
+- **JSON Lines** (.jsonl) - Extracts from text/content/body/message fields
 
-### 3. Pick a version and follow its README
+### 3. Install README link
 
-- **Python** → see [`python/README.md`](python/README.md)
 - **JavaScript** → see [`js/README.md`](js/README.md)
 
 ---
 
-## Commands at a glance
+## Embedding Provider Configuration
 
-| Action | Python | JavaScript |
-|---|---|---|
-| Install deps | `pip install -r requirements.txt` | `npm install` |
-| Build database | `python rag_web.py build` | `node rag_web.js build` |
-| Start web UI | `python rag_web.py serve` | `node rag_web.js serve` |
-| Interactive CLI | `python rag.py` | `node rag.js` |
-| Ask one question | `python rag.py ask "..."` | `node rag.js ask "..."` |
-| Check DB stats | `python rag.py stats` | `node rag.js stats` |
+The project supports three embedding providers:
+- **Ollama** (default, local)
+- **OpenAI**
+- **Google Gemini**
+
+### Option 1: Ollama (Default)
+
+No additional configuration needed. Make sure Ollama is running with the embedding model:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+### Option 2: OpenAI
+
+1. Get an API key from [OpenAI](https://platform.openai.com/api-keys)
+2. Set your API key as an environment variable:
+
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+export EMBEDDING_PROVIDER="openai"
+```
+
+Or edit `js/config.js`:
+
+```javascript
+export const config = {
+  EMBEDDING_PROVIDER: 'openai',
+  openai: {
+    apiKey: 'your-api-key-here',
+    model: 'text-embedding-3-small', // or 'text-embedding-3-large'
+  },
+  // ...
+};
+```
+
+### Option 3: Google Gemini
+
+1. Get an API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Set your API key as an environment variable:
+
+```bash
+export GOOGLE_API_KEY="your-api-key-here"
+export EMBEDDING_PROVIDER="google"
+```
+
+Or edit `js/config.js`:
+
+```javascript
+export const config = {
+  EMBEDDING_PROVIDER: 'google',
+  google: {
+    apiKey: 'your-api-key-here',
+    model: 'embedding-001', // or 'text-embedding-004'
+  },
+  // ...
+};
+```
+
+After changing the embedding provider, rebuild your database:
+
+```bash
+cd js
+npm run build
+```
 
 ---
 
 ## Notes
-
-- The Python and JS versions use **separate databases** — you need to run `build` once for each version you want to use
-- Both databases are gitignored and auto-generated
-- You can run both web servers at the same time (different ports) to compare them side by side
+You can check out more info about the embedding viz in the doc: [VISUALIZE](js/VISUALIZE.md)
