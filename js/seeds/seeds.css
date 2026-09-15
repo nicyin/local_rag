@@ -1,4 +1,4 @@
-/* Seeds canvas — tray, cards, and the React Flow chrome. */
+/* Seeds canvas — tray, cards, menu, and the React Flow chrome. */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -6,6 +6,21 @@
   --ink: #000;
   --line: #e6e6e6;
   --muted: #8b8b8b;
+  /* "Typed/handwritten/system" elements (UX_SPEC.md §10): annotation textarea,
+     the Expand button, the seeds panel title, the highlighted-snippet chip. */
+  --mono: 'JetBrains Mono', Menlo, 'SF Mono', ui-monospace, monospace;
+
+  /* Action-pill colors (UX_SPEC.md §5/§10). */
+  --act-neighbor:       #ffc5ff;
+  --act-compare:        #d3b0f9;
+  --act-counterexample: #93ffb9;
+  --act-zoomin:         #fe9544;
+  --act-zoomout:        #eaff00;
+  --act-evidence:       #93e3ff;
+  /* Custom question / highlight mark / highlighted-snippet chip. */
+  --highlight: #befc6d;
+  --source-web:    #b7ffee;
+  --source-report: #ededed;
 }
 
 html, body, #root { height: 100%; }
@@ -17,7 +32,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.flow { width: 100%; height: 100%; }
+.flow { position: relative; width: 100%; height: 100%; }
 
 /* ── Seeds tray ─────────────────────────────────────────────────────────────── */
 
@@ -44,7 +59,7 @@ body {
 
 .tray--collapsed .tray-head { border-bottom: none; }
 
-.tray-title { font-size: 15px; font-weight: 500; letter-spacing: -.01em; }
+.tray-title { font: 15px var(--mono); font-weight: 500; letter-spacing: -.01em; }
 
 .tray-toggle {
   display: flex;
@@ -71,7 +86,7 @@ body {
   column-gap: 10px;
 }
 
-/* ── Cards ──────────────────────────────────────────────────────────────────── */
+/* ── Gallery seed ───────────────────────────────────────────────────────────── */
 
 .seed {
   display: block;
@@ -83,13 +98,32 @@ body {
   letter-spacing: -.005em;
   color: #fff;
   background: var(--ink);
-  border-radius: 3px;
+  border-radius: 0; /* provocation/seed/generated cards are square-cornered, no exceptions */
   cursor: grab;
   user-select: none;
 }
 
 .seed:active { cursor: grabbing; }
 .seed--dragging { opacity: .4; }
+
+/* Same treatment on-canvas and in the gallery: a plain, uncaptioned tile,
+   object-fit: cover, 2px black border, zero radius — no title, no body, no
+   chip, nothing overlaid (UX_SPEC.md §13). Draggable is the whole
+   interaction surface; there's no click/menu/highlight handling to write. */
+.seed--image {
+  padding: 0;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 2px solid #000;
+}
+
+.seed--image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
 
 .tray-empty {
   column-span: all;
@@ -99,7 +133,7 @@ body {
   color: var(--muted);
 }
 
-/* ── Dropped card ───────────────────────────────────────────────────────────── */
+/* ── Black card: provocation / seed-text ───────────────────────────────────── */
 
 /* Wrapper exists so the hover controls can straddle the card's edges. */
 .card-wrap { position: relative; width: 305px; }
@@ -112,7 +146,8 @@ body {
   padding: 28px;
   color: #fff;
   background: var(--ink);
-  border-radius: 3px;
+  border-radius: 0;
+  border: 2px solid #000;
 }
 
 /* One size on every card. Long text grows the card instead of shrinking to
@@ -123,28 +158,7 @@ body {
   letter-spacing: -.02em;
 }
 
-/* Capped and scrollable: the passages run to ~1,200 characters, and without a
-   ceiling the card grows tall enough to push its own Collapse button offscreen. */
-.card-sources {
-  max-height: 260px;
-  margin-top: 20px;
-  padding-top: 16px;
-  overflow-y: auto;
-  border-top: 1px solid rgba(255, 255, 255, .22);
-  font-size: 12px;
-  line-height: 1.55;
-  letter-spacing: 0;
-  color: rgba(255, 255, 255, .62);
-  cursor: auto;
-}
-
-.card-sources::-webkit-scrollbar { width: 6px; }
-.card-sources::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, .25);
-  border-radius: 3px;
-}
-
-/* ── Hover controls ─────────────────────────────────────────────────────────── */
+/* ── Hover controls (shared by black cards, branch cards, annotations) ──────── */
 
 .card-close,
 .card-expand {
@@ -156,10 +170,13 @@ body {
 
 .card-wrap:hover .card-close,
 .card-wrap:hover .card-expand,
+.branch-wrap:hover .card-close,
+.annotation-wrap:hover .card-close,
 .card-close:focus-visible,
 .card-expand:focus-visible { opacity: 1; }
 
-/* Centred on the top-right corner, half outside the card. */
+/* Centred on the top-right corner, half outside the card. White circle, 2px
+   black border (UX_SPEC.md §10). */
 .card-close {
   top: 0;
   right: 0;
@@ -167,28 +184,29 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   color: #111;
   background: #fff;
-  border: 1px solid #e0e0e0;
+  border: 2px solid #000;
   border-radius: 50%;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+  z-index: 5;
 }
 
 .card-close:hover { background: #f2f2f2; }
 
-/* Pill hanging off the bottom edge, centred. */
+/* One-time reveal, not a repeatable dropdown — no chevron animation, no
+   open/closed state, just a static label (UX_SPEC.md §4/§10). Disappears
+   for good the instant it's clicked. */
 .card-expand {
   bottom: 0;
   left: 50%;
   transform: translate(-50%, 50%);
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 18px;
-  font: inherit;
-  font-size: 13px;
+  padding: 8px 20px;
+  font: 13px var(--mono);
   font-weight: 600;
   letter-spacing: -.01em;
   color: #fff;
@@ -200,14 +218,291 @@ body {
 
 .card-expand:hover { background: #292929; }
 
-.chev { transition: transform .15s ease; }
-.chev--up { transform: rotate(180deg); }
+/* ── White card: generated / branch ──────────────────────────────────────────── */
+
+.branch-wrap { position: relative; width: 260px; }
+
+.branch {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  background: #fff;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+}
+
+/* Quoted parent snippet a card was produced from — shows the quote, never
+   the action name (that only ever lives on the connector-line label). */
+.branch-quote {
+  align-self: flex-start;
+  padding: 4px 9px;
+  font: 12px var(--mono);
+  font-weight: 700;
+  color: #1c3d00;
+  background: var(--highlight);
+  border-radius: 5px;
+}
+
+.branch-title {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.28;
+  letter-spacing: -.015em;
+  cursor: text;
+  /* React Flow sets `user-select: none` on every .react-flow__node so
+     dragging a node never accidentally selects text — that also silently
+     blocks the highlighting this element needs, so it's opted back in
+     explicitly here. */
+  user-select: text;
+}
+
+.branch-body {
+  max-height: 170px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #333;
+  cursor: text;
+  user-select: text; /* see .branch-title */
+}
+
+.branch-body::-webkit-scrollbar { width: 6px; }
+.branch-body::-webkit-scrollbar-thumb { background: #d5d5d5; border-radius: 3px; }
+
+/* Persistent highlighter mark — stays visible as a trail of what's been
+   explored on this card (UX_SPEC.md §6). */
+.hl {
+  background: var(--highlight);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.branch-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip-wrap { position: relative; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  text-transform: uppercase;
+  color: #111;
+  background: var(--source-report);
+  border-radius: 0;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.chip--web { background: var(--source-web); }
+
+/* Hover popover — citation body, above the chip (UX_SPEC.md §8). */
+.chip-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  width: 220px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 2px solid #000;
+  border-radius: 14px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .18);
+  font-size: 12.5px;
+  line-height: 1.5;
+  animation: pop-in .12s ease;
+}
+
+.chip-pop strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chip-pop p { color: #444; }
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Action-pill menu (UX_SPEC.md §5) ────────────────────────────────────────── */
+
+/* No enclosing panel — the pills, scope chip, and question input float
+   directly below the card with just spacing between them, not inside a
+   bordered box. */
+.branch-menu {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: max-content;
+  max-width: 290px;
+  cursor: default;
+}
+
+.menu-scope {
+  align-self: flex-start;
+  padding: 4px 9px;
+  font: 11.5px var(--mono);
+  font-weight: 700;
+  color: #1c3d00;
+  background: var(--highlight);
+  border-radius: 5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pill-wrap { position: relative; }
+
+.pill {
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+  color: #111;
+  border: 2px solid #000;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: filter .1s ease;
+}
+
+.pill:hover:not(:disabled) { filter: brightness(0.92); }
+.pill:disabled { opacity: .5; cursor: not-allowed; }
+
+.pill-tip {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: 140px;
+  padding: 7px 9px;
+  color: #fff;
+  background: #000;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  animation: fade-in .12s ease;
+  pointer-events: none;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.menu-question {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  border: 1.5px solid #ccc;
+  border-radius: 8px;
+  outline: none;
+}
+
+.menu-question:focus { border-color: #000; }
+
+/* ── Annotation card (UX_SPEC.md §9) ─────────────────────────────────────────── */
+
+.annotation-wrap { position: relative; width: 240px; }
+
+.annotation {
+  display: block;
+  width: 100%;
+  min-height: 110px;
+  padding: 16px;
+  font: 13px var(--mono);
+  line-height: 1.5;
+  color: #222;
+  background: #fff;
+  border: 2px dashed #000;
+  border-radius: 14px; /* the one card type that keeps pronounced rounded corners */
+  resize: none;
+  overflow: hidden;
+  outline: none;
+}
+
+.annotation::placeholder { color: #999; }
+
+/* ── Blank-canvas "+" hint (UX_SPEC.md §9) ───────────────────────────────────── */
+
+.plus-btn {
+  position: absolute;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px; /* centred on the cursor point */
+  font-size: 18px;
+  line-height: 1;
+  color: #fff;
+  background: #000;
+  border: 2px solid #000;
+  border-radius: 50%;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .25);
+  cursor: pointer;
+  animation: plus-in .12s ease;
+}
+
+@keyframes plus-in {
+  from { opacity: 0; transform: scale(.7); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* ── On-canvas image seed ─────────────────────────────────────────────────────
+   Fixed 220×220 square, same border/corner treatment as every other card, no
+   title/body/chip/handle — see .seed--image above for the shared rationale. */
+
+.image-node {
+  width: 220px;
+  height: 220px;
+  overflow: hidden;
+  background: #eee;
+  border: 2px solid #000;
+  border-radius: 0;
+}
+
+.image-node img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
 
 /* ── React Flow chrome ──────────────────────────────────────────────────────── */
 
 .react-flow__node { cursor: grab; }
 .react-flow__node:active { cursor: grabbing; }
-.react-flow__node.selected .card { outline: 2px solid #6a5cff; outline-offset: 3px; }
+.react-flow__node.selected .card,
+.react-flow__node.selected .branch { outline: 2px solid #6a5cff; outline-offset: 3px; }
 
 .react-flow__controls {
   box-shadow: 0 2px 10px rgba(0, 0, 0, .08);
@@ -231,64 +526,6 @@ body {
   line-height: 1.5;
   color: var(--muted);
 }
-
-/* ── Chunk card ─────────────────────────────────────────────────────────────── */
-
-/* One retrieved passage, fanned out when a card is clicked. */
-.chunk {
-  width: 360px;
-  padding: 24px 26px;
-  background: #fff;
-  border: 2px solid var(--ink);
-  cursor: default;
-}
-
-.chunk-title {
-  margin-bottom: 14px;
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.28;
-  letter-spacing: -.015em;
-}
-
-/* Passages run ~500 characters. Capped so the three fanned cards keep a
-   predictable height and don't collide — GAP_Y in app.jsx assumes this. */
-.chunk-body {
-  max-height: 180px;
-  overflow-y: auto;
-  font-size: 15px;
-  line-height: 1.5;
-  color: #4a4a4a;
-}
-
-.chunk-body::-webkit-scrollbar { width: 6px; }
-.chunk-body::-webkit-scrollbar-thumb { background: #d5d5d5; border-radius: 3px; }
-
-.chunk-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 18px;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 11px;
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: -.01em;
-  color: #111;
-  background: #ececec;
-  border-radius: 3px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-/* Only shown when the passage quotes a link. */
-.chip--web { background: #b8f2d8; }
-.chip--web:hover { background: #a2ecca; }
 
 /* Edge anchors only — the arrows should look like they leave the card itself. */
 .react-flow__handle {

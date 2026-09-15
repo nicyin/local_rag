@@ -7,6 +7,7 @@
 import express from 'express';
 import { ChromaClient } from 'chromadb';
 import { Ollama } from 'ollama';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { config } from './config.js';
@@ -212,6 +213,134 @@ app.post('/ask', async (req, res) => {
   }
 });
 
+/**
+ * Retrieval-only helper for the seeds canvas's "Find evidence" pill, used
+ * whenever it's clicked on a card that has no pre-computed passages of its
+ * own (i.e. anything other than the original provocation cards, which keep
+ * using their baked-in `data.passages` and never call this). Real Chroma
+ * retrieval, real chunks, no LLM step — "pull a supporting passage", not
+ * "generate a take on it". Mirrors query()'s retrieval half above; kept as
+ * its own function rather than factored out, per this repo's
+ * duplicate-rather-than-share convention (see AGENTS.md).
+ */
+async function retrieveEvidence(question, n = config.rag.nResults) {
+  let col;
+  try {
+    const collectionConfig = { name: 'docs' };
+    if (usesChromaEmbeddingFunction()) collectionConfig.embeddingFunction = queryEmbeddingFunction;
+    col = await chroma.getCollection(collectionConfig);
+  } catch {
+    return { chunks: [], error: 'Database not found. Run: node rag_web.js build' };
+  }
+
+  let results;
+  if (usesChromaEmbeddingFunction()) {
+    results = await col.query({ queryTexts: [question], nResults: n });
+  } else {
+    const embedding = await generateEmbedding(question);
+    results = await col.query({ queryEmbeddings: [embedding], nResults: n });
+  }
+
+  const chunks = results.documents[0].map((text, i) => ({
+    text,
+    source: results.metadatas[0][i]?.source || 'Unknown',
+  }));
+
+  return { chunks, error: null };
+}
+
+app.post('/seed-evidence', async (req, res) => {
+  const question = (req.body.question || '').trim();
+  if (!question) return res.json({ chunks: [], error: 'No question provided.' });
+  try {
+    res.json(await retrieveEvidence(question));
+  } catch (e) {
+    res.json({ chunks: [], error: `Error: ${e.message}` });
+  }
+});
+
+/**
+ * Real retrieval + generation for the seeds canvas's other five pills (Find a
+ * neighbor / Compare this / Counterexample / Zoom in / Zoom out) and custom
+ * questions asked from a branch card's menu. Mirrors query() (same
+ * collection, same embedding path as /ask), but asks Ollama for a short
+ * title alongside the body in one generation call — branch cards need both,
+ * and there's no separate title-writing step anywhere else in this repo, so
+ * this asks for both at once rather than adding a second round-trip per
+ * card. Kept apart from query()/`/ask` (rather than refactored into a shared
+ * helper) so the main chat endpoint's prompt and output shape are untouched.
+ */
+async function generateBranch(question) {
+  let col;
+  try {
+    const collectionConfig = { name: 'docs' };
+    if (usesChromaEmbeddingFunction()) collectionConfig.embeddingFunction = queryEmbeddingFunction;
+    col = await chroma.getCollection(collectionConfig);
+  } catch {
+    return { title: 'No database', body: 'Run: node rag_web.js build', sources: [], error: true };
+  }
+
+  let results;
+  if (usesChromaEmbeddingFunction()) {
+    results = await col.query({ queryTexts: [question], nResults: config.rag.nResults });
+  } else {
+    const embedding = await generateEmbedding(question);
+    results = await col.query({ queryEmbeddings: [embedding], nResults: config.rag.nResults });
+  }
+
+  if (!results.documents[0].length) {
+    return { title: 'Nothing found', body: 'Nothing relevant found in the documents.', sources: [], error: false };
+  }
+
+  const context = results.documents[0].join('\n\n');
+  const prompt =
+    'Using only the context below, respond to the prompt. Reply in exactly this ' +
+    'two-line format and nothing else:\n' +
+    'TITLE: <a plain five-to-eight word title, no quotes, no trailing punctuation>\n' +
+    'BODY: <a two-to-four sentence answer>\n\n' +
+    `Context:\n${context}\n\nPrompt: ${question}`;
+
+  const raw = (await ollama.generate({ model: config.llm.model, prompt })).response;
+
+  const titleMatch = raw.match(/TITLE:\s*(.+)/i);
+  const bodyMatch  = raw.match(/BODY:\s*([\s\S]+)/i);
+
+  // qwen2.5:7b sometimes drops the "TITLE:" label but still writes a title
+  // on its own first line before "BODY:" — fall back to that line rather
+  // than the whole question, which reads much closer to a real title.
+  let title = titleMatch?.[1]?.trim();
+  if (!title) {
+    const firstLine = raw.split('\n')[0]?.trim();
+    title = firstLine && !/^BODY:/i.test(firstLine) ? firstLine : question;
+  }
+  title = title.slice(0, 80);
+  const body = (bodyMatch ? bodyMatch[1] : raw).trim();
+
+  // One source chip per distinct document, carrying the actual chunk that
+  // fed the answer as its citation (so the hover popover shows a real
+  // excerpt, not a placeholder).
+  const seen = new Set();
+  const sources = [];
+  results.metadatas[0].forEach((m, i) => {
+    const name = m?.source || 'Unknown';
+    if (seen.has(name)) return;
+    seen.add(name);
+    sources.push({ tag: 'report', name, citation: results.documents[0][i] });
+  });
+
+  return { title, body, sources, error: false };
+}
+
+app.post('/seed-generate', async (req, res) => {
+  const question = (req.body.question || '').trim();
+  if (!question) return res.json({ title: '', body: 'No question provided.', sources: [], error: true });
+  try {
+    res.json(await generateBranch(question));
+  } catch (e) {
+    res.json({ title: 'Error', body: `Error: ${e.message}`, sources: [], error: true });
+  }
+});
+
 // Fetch the stored collection. Uses the index embedding function so the returned
 // vectors are exactly what build() wrote - no re-embedding happens here.
 async function getDocsCollection() {
@@ -296,6 +425,20 @@ app.get('/embeddings-semantic', async (_req, res) => {
   } catch (e) {
     console.error('Semantic re-embed failed:', e.message);
     res.status(500).json({ error: `Re-embedding failed: ${e.message}` });
+  }
+});
+
+// Image seeds for the seeds canvas — the manifest `seed-images.js` writes.
+// Regenerate by hand (`node seed-images.js`) after changing `../images/`;
+// this route just reads whatever the manifest currently says.
+const SEED_IMAGES = path.resolve(__dirname, 'seed_images.json');
+app.get('/seed-images', (_req, res) => {
+  try {
+    if (!fs.existsSync(SEED_IMAGES)) return res.json([]);
+    res.json(JSON.parse(fs.readFileSync(SEED_IMAGES, 'utf8')));
+  } catch (e) {
+    console.error('Seed images read failed:', e.message);
+    res.status(500).json({ error: `Could not read seed images: ${e.message}` });
   }
 });
 

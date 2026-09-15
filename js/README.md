@@ -84,7 +84,8 @@ node rag.js stats
 ### Seeds canvas
 
 An infinite canvas with a tray of ten random provocations on the right. Drag a
-seed out of the tray and it becomes a card on the canvas.
+seed out of the tray and it becomes a card on the canvas, where it can spawn
+further cards by asking real questions of the corpus.
 
 ```bash
 npm run build:seeds   # once, and after editing seeds/app.jsx
@@ -100,47 +101,133 @@ the dot grid, the zoom controls, and node dragging.
 | --- | --- |
 | `seeds.html` | Shell page — loads the bundle, nothing else |
 | `seeds/app.jsx` | The canvas and tray. **Edit this one.** |
-| `seeds/seeds.css` | Tray, card, and React Flow styling |
+| `seeds/seeds.css` | Tray, card, menu, and React Flow styling |
 | `seeds/build.mjs` | esbuild config → `static/` (gitignored) |
 
 `npm run watch:seeds` rebuilds on save.
 
-The cards come from `/provocations`, which reads `provocations_with_sources.csv`
-(falling back to `provocations.csv`) and returns a random sample with `?n=10`.
-`parseSources` in `csv.js` splits each `sources` cell back into `{ file,
-passages[] }` server-side — splitting on the full `" | "` sequence rather than a
-bare pipe, so passages containing a stray quote or pipe survive intact — and the
-canvas gets structured data rather than a string to pick apart.
+The tray's cards come from `/provocations`, which reads
+`provocations_with_sources.csv` (falling back to `provocations.csv`) and
+returns a random sample with `?n=10`. `parseSources` in `csv.js` splits each
+`sources` cell back into `{ file, passages[] }` server-side — splitting on the
+full `" | "` sequence rather than a bare pipe, so passages containing a stray
+quote or pipe survive intact — and the canvas gets structured data rather than
+a string to pick apart.
 
-**Clicking a card** fans its three retrieved passages out to the right as
-bordered chunk cards, joined by curved arrows. Clicking it again puts them away;
-removing the card takes its chunks and edges with it. Each chunk card carries a
-`Source` chip naming the document, plus a second mint `Source` chip linking out
-whenever that passage quotes a URL inline (only three passages in the current
-corpus do).
+#### The three kinds of on-canvas card
 
-The chunk titles are `Source 1..3`. If those should instead be the prompt-style
-moves from the mock — Compare this / Find evidence / Counterexample — that's the
-`title` field in `onNodeClick`.
+There is exactly **one** globally-selected card and one active highlighted
+snippet for the whole app at any time — both live as plain state in `Canvas`
+and are threaded down to every node via `SelectionContext`, deliberately
+*not* as local per-node `useState` (an earlier version of `CardNode` did
+that; if you're tempted to give a node its own "am I open" flag again,
+don't — nothing would then stop two cards from showing UI open at once).
 
-Hovering a card reveals two controls, both in `CardNode`:
+- **`card`** (black) — a provocation dropped from the tray, or a seed
+  planted on the canvas. No menu, no highlighting — hovering reveals a
+  one-time **Expand ⌄** pill (`CardNode`). Clicking it fans that card's
+  three real retrieved passages out as `branch` cards, joined by curved
+  arrows with no edge label (nothing was clicked to name them), then the
+  pill disappears for good — it's a one-time reveal, not a toggle. The
+  passages are the same ones `/provocations` already attached to the seed;
+  this never makes a network call itself.
+- **`branch`** (white) — a generated card, produced by an action pill or a
+  custom question on some other card's menu. Clicking one opens its action
+  menu (`BranchNode` + `BranchMenu`); dragging never does. Selecting text in
+  its title or body highlights it (a persistent `<mark>`) and scopes the
+  menu to that snippet via an "Acting on: …" pill, until an action is taken
+  (which makes the highlight permanent) or the selection is abandoned
+  (which removes it — see `activateSnippet`/`confirmSnippet` in `Canvas`).
+  Every `branch` card is exactly as interactive as any other — chain off of
+  one indefinitely.
+- **`annotation`** (white, dashed) — a free-text sticky note. Double-click
+  blank canvas, or click the "+" that previews after resting the pointer on
+  blank space for ~450ms, to add one. No menu, no highlighting, just an
+  auto-growing `<textarea>` and delete.
 
-- **×**, centred on the top-right corner — removes the card from the canvas.
-- **Expand**, a pill on the bottom edge — reveals that provocation's retrieved
-  source passages beneath a divider. The passages are capped at `260px` and
-  scroll, so a card can't grow tall enough to push its own Collapse button
-  offscreen.
+#### The action menu and the six pills
 
-Every card uses one type size (`.card-text`, 30px) whatever the text length —
-a long quote grows the card downward rather than shrinking to fit, so a canvas
-full of cards reads as a single weight. Short text sits at the bottom of the
-`345px` minimum; long text fills and grows past it.
+A `branch` card's menu offers six colored pills plus a free-text "Ask your
+own question…" input (Enter submits). Each pill is defined once, in the
+`ACTIONS` array near the top of `app.jsx`:
 
-Two more behaviours worth knowing, both one-liners in `seeds/app.jsx`:
+| Pill | Real mechanism | Branches produced |
+| --- | --- | --- |
+| Find evidence | `POST /seed-evidence` — retrieval only, no LLM. Pulls real chunks straight from the `docs` Chroma collection using the card's own text (or its highlighted snippet) as the query. | however many chunks come back (`config.rag.nResults`) |
+| Find a neighbor | `POST /seed-generate` — real retrieval **and** real Ollama generation, using a pill-specific question built by `questionFor()` | 2 (two independent calls) |
+| Counterexample | same as above | 2 (two independent calls) |
+| Compare this | same as above | 1 |
+| Zoom in | same as above | 1 |
+| Zoom out | same as above | 1 |
+| *(custom question)* | `POST /seed-generate` with the typed text verbatim | 1 |
 
-- A seed is **removed from the tray** once dropped. Delete the `setSeeds(...)`
-  filter in `onDrop` to let seeds be dragged out more than once.
-- The tray is refilled only on reload, so the ten change every refresh.
+`/seed-evidence` and `/seed-generate` (both in `rag_web.js`, right after
+`/ask`) are new, small, self-contained endpoints — they mirror `query()`'s
+retrieval logic but are kept separate from `/ask` on purpose (this repo
+duplicates RAG logic across files rather than sharing it; see `AGENTS.md`),
+so the main chat endpoint's prompt and behavior are untouched.
+`/seed-generate` asks Ollama for a short title *and* a body in one
+generation call (`TITLE:` / `BODY:` lines it then splits apart), since
+branch cards need both and there's no separate title-writing step anywhere
+else — `generateBranch()` in `rag_web.js` falls back to the response's first
+line as the title if the model drops the `TITLE:` label, which `qwen2.5:7b`
+does occasionally.
+
+New siblings from the same action fan out vertically around the parent's
+current center, and repeated actions on the *same* parent cascade further
+right each time (`spawnChildren`'s `cascade` offset) rather than stacking
+new cards on top of old ones.
+
+#### Sources
+
+`branch` cards carry real citations, never placeholders. Each source chip
+(`SourceChip`) shows a gray "report" chip for the corpus document that fed
+the answer, hovering it reveals a popover with the actual quoted passage —
+no fake sources are ever added just because a card came from generation
+rather than retrieval.
+
+#### Image seeds
+
+Drop plain image files into `images/` at the repo root (siblings of `js/`,
+`docs/`, etc — `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp`, case-insensitive;
+anything else is ignored), then:
+
+```bash
+npm run build:images   # hand-run, not automatic — re-run whenever images/ changes
+```
+
+This copies each accepted file into `js/static/seed-images/` under a new,
+sequentially-numbered name (`seed-image-01.png`, `seed-image-02.png`, … in
+whatever order the filesystem lists `images/` — **not** a stable id across
+regenerations; adding/removing/reordering source files reshuffles the
+numbers) and writes one record per image to `seed_images.json`, which
+`/seed-images` serves as-is. `App`'s boot fetch pulls both `/provocations`
+and `/seed-images` and interleaves them (`interleaveSeeds`) at roughly one
+image per three text seeds, with any leftover images appended once text
+seeds run out — so the gallery reads as a mix, not a wall of quotes
+followed by a photo dump.
+
+Image seeds are the most restricted card type on purpose (`ImageNode`):
+draggable, and that's the entire interaction surface. No click handler, no
+menu, no highlighting (no text to highlight), no delete button, no Expand,
+no `Handle` — nothing ever spawns from or connects to one. A click on an
+image card still bubbles up to `Canvas`'s central `onNodeClick`, which
+closes whatever else was selected exactly like a click on blank canvas
+would, purely because it isn't a `branch` card — nothing image-specific
+was needed for that part.
+
+#### Deliberately out of scope for now
+
+One thing `UX_SPEC.md`'s reference build has that this repo's seeds canvas
+does not (yet): **gallery seeds are drag-only.** Clicking or highlighting a
+card *inside* the tray (before it's on the canvas) doesn't open a menu —
+only dragging it onto the canvas does anything. Tray seeds (text and image
+alike) are also still consumed on drop; delete the `setSeeds(...)` filter
+in `Canvas`'s `onDrop` to let one be dragged out more than once.
+
+Every card uses one type size (`.card-text` / `.branch-body`) whatever the
+text length — a long quote grows the card downward rather than shrinking to
+fit, so a canvas full of cards reads as a single weight.
 
 ### Provocation sources
 
